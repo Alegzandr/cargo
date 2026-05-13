@@ -1,0 +1,244 @@
+image: docker:27
+
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: ""
+  APP_SUBDOMAIN: cargo
+  DOCKER_HOST: unix:///var/run/docker.sock
+  # Hostnames the pipeline deploys to. Override per-project in GitLab CI/CD
+  # variables — the placeholders below will fail at first deploy.
+  APP_DOMAIN: example.com
+
+# Reference pipeline. Operators must:
+#   1. Set APP_DOMAIN (above) — or override APP_HOST_DEV / APP_HOST_PROD
+#      directly in GitLab CI/CD variables — for their own infra.
+#   2. Edit deploy/paths.env (DEPLOY_DIR, DATA_DIR_BASE) to match their host.
+#   3. Provide the secrets listed in docs/DEPLOY.md as GitLab CI/CD variables.
+
+.deploy_defaults: &deploy_defaults
+  tags:
+    - devops
+  image: docker:27
+  before_script:
+    - set -euo pipefail
+    - docker info
+    - |
+      if [[ -z "${CI_REGISTRY:-}" ]]; then
+        echo "CI_REGISTRY is not set." >&2
+        exit 1
+      fi
+    - export CI_REGISTRY_IMAGE="${CI_REGISTRY_IMAGE:-${CI_REGISTRY}/${CI_PROJECT_PATH}}"
+    - export IMAGE_TAG="${CI_COMMIT_TAG:-${CI_COMMIT_REF_SLUG}}"
+    - set -a; source deploy/paths.env; set +a
+    - |
+      if [[ -n "${CI_COMMIT_TAG:-}" ]]; then
+        export DEPLOY_ENV=prod
+        export APP_HOST="${APP_HOST_PROD:-${APP_SUBDOMAIN}.${APP_DOMAIN}}"
+        export DATA_DIR="${DATA_DIR_BASE}"
+      else
+        export DEPLOY_ENV=dev
+        export APP_HOST="${APP_HOST_DEV:-${APP_SUBDOMAIN}-d.${APP_DOMAIN}}"
+        export DATA_DIR="${DATA_DIR_BASE}-d"
+      fi
+    - |
+      validate_paths() {
+        if [[ -z "${DEPLOY_DIR:-}" ]]; then
+          echo "DEPLOY_DIR must be set in deploy/paths.env" >&2; exit 1
+        fi
+        if [[ -z "${DATA_DIR:-}" ]]; then
+          echo "DATA_DIR_BASE must be set in deploy/paths.env" >&2; exit 1
+        fi
+      }
+      write_app_env() {
+        local target="$1"
+        : "${CARGO_MASTER_KEY:?Set CARGO_MASTER_KEY (base64 of 32 random bytes) for ${CI_ENVIRONMENT_NAME:-this environment}}"
+        : "${AUTH_SECRET:?Set AUTH_SECRET for ${CI_ENVIRONMENT_NAME:-this environment}}"
+        : "${AUTH_DISCORD_ID:?Set AUTH_DISCORD_ID for ${CI_ENVIRONMENT_NAME:-this environment}}"
+        : "${AUTH_DISCORD_SECRET:?Set AUTH_DISCORD_SECRET for ${CI_ENVIRONMENT_NAME:-this environment}}"
+        printf '%s\n' \
+          "NODE_ENV=production" \
+          "AUTH_TRUST_HOST=true" \
+          "AUTH_URL=https://${APP_HOST}" \
+          "AUTH_SECRET=${AUTH_SECRET}" \
+          "AUTH_DISCORD_ID=${AUTH_DISCORD_ID}" \
+          "AUTH_DISCORD_SECRET=${AUTH_DISCORD_SECRET}" \
+          "CARGO_MASTER_KEY=${CARGO_MASTER_KEY}" \
+          "CARGO_BLOB_PATH=/var/lib/cargo/blobs" \
+          "CARGO_MAX_FILE_SIZE=214748364800" \
+          "CARGO_USER_QUOTA=214748364800" \
+          "CARGO_LINK_TTL_SECONDS=3600" \
+          "LOG_LEVEL=warning" \
+          > "${target}"
+      }
+    - validate_paths
+    - mkdir -p "${DEPLOY_DIR}/${DEPLOY_ENV}" "${DATA_DIR}/postgres" "${DATA_DIR}/blobs" "${DATA_DIR}/logs"
+    - echo "${CI_REGISTRY_PASSWORD:-${CI_JOB_TOKEN}}" | docker login --username "${CI_REGISTRY_USER:-gitlab-ci-token}" --password-stdin "${CI_REGISTRY}"
+
+# ---- test -----------------------------------------------------------------
+test:
+  stage: test
+  tags: [devops]
+  image: node:22-alpine
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_TAG =~ /^v.*/'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  variables:
+    DATABASE_URL: postgres://test:test@localhost:5432/test
+    AUTH_SECRET: ci-secret-not-for-prod-ci-secret-not-for-prod
+    AUTH_DISCORD_ID: ci
+    AUTH_DISCORD_SECRET: ci
+    CARGO_MASTER_KEY: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  script:
+    - npm ci --no-audit --no-fund
+    - npm run lint
+    - npm run typecheck
+    - npm run test:coverage
+
+# ---- build ----------------------------------------------------------------
+build:
+  stage: build
+  extends: .deploy_defaults
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_TAG =~ /^v.*/'
+  script:
+    - docker build -t "${CI_REGISTRY_IMAGE}/app:${IMAGE_TAG}" -f docker/Dockerfile .
+    - docker push "${CI_REGISTRY_IMAGE}/app:${IMAGE_TAG}"
+
+# ---- deploy_dev (automatic on develop) ------------------------------------
+deploy_dev:
+  stage: deploy
+  extends: .deploy_defaults
+  needs: ["build"]
+  environment:
+    name: cargo-dev
+    url: https://${APP_HOST_DEV}
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+  script:
+    - TARGET_DIR="${DEPLOY_DIR}/${DEPLOY_ENV}"
+    - cp deploy/compose.yml "${TARGET_DIR}/compose.yml"
+    - cp deploy/paths.env "${TARGET_DIR}/paths.env"
+    - write_app_env "${TARGET_DIR}/app.env"
+    - 'test -n "${DB_PASSWORD:-}" || { echo "Set DB_PASSWORD for ${CI_ENVIRONMENT_NAME:-this environment}" >&2; exit 1; }'
+    - cd "${TARGET_DIR}"
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml pull
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml up -d
+
+# ---- stop_dev (manual) ----------------------------------------------------
+stop_dev:
+  stage: deploy
+  extends: .deploy_defaults
+  environment:
+    name: cargo-dev
+    action: stop
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      when: manual
+  script:
+    - TARGET_DIR="${DEPLOY_DIR}/${DEPLOY_ENV}"
+    - mkdir -p "${TARGET_DIR}"
+    - cp deploy/compose.yml "${TARGET_DIR}/compose.yml"
+    - cp deploy/paths.env "${TARGET_DIR}/paths.env"
+    - write_app_env "${TARGET_DIR}/app.env"
+    - 'test -n "${DB_PASSWORD:-}" || { echo "Set DB_PASSWORD for ${CI_ENVIRONMENT_NAME:-this environment}" >&2; exit 1; }'
+    - cd "${TARGET_DIR}"
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml down
+
+# ---- wipe_dev (manual, requires CONFIRM_WIPE=YES) -------------------------
+# Hard-resets the dev environment: drops the Postgres volume and removes all
+# encrypted blobs, then brings the stack back up clean.
+wipe_dev:
+  stage: deploy
+  extends: .deploy_defaults
+  environment:
+    name: cargo-dev
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      when: manual
+  script:
+    - 'test "${CONFIRM_WIPE:-}" = "YES" || { echo "Refusing to wipe: set CONFIRM_WIPE=YES when running this job." >&2; exit 1; }'
+    - TARGET_DIR="${DEPLOY_DIR}/${DEPLOY_ENV}"
+    - mkdir -p "${TARGET_DIR}"
+    - cp deploy/compose.yml "${TARGET_DIR}/compose.yml"
+    - cp deploy/paths.env "${TARGET_DIR}/paths.env"
+    - write_app_env "${TARGET_DIR}/app.env"
+    - 'test -n "${DB_PASSWORD:-}" || { echo "Set DB_PASSWORD for ${CI_ENVIRONMENT_NAME:-this environment}" >&2; exit 1; }'
+    - cd "${TARGET_DIR}"
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml down -v
+    - rm -rf "${DATA_DIR}/blobs" "${DATA_DIR}/postgres"
+    - mkdir -p "${DATA_DIR}/blobs" "${DATA_DIR}/postgres"
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml pull
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml up -d
+
+# ---- wipe_prod (manual, requires CONFIRM_WIPE=YES-I-MEAN-IT) --------------
+# Hard-resets prod: drops the Postgres volume and removes all encrypted blobs,
+# then brings the stack back up clean. Confirmation token is intentionally
+# more annoying than wipe_dev to make muscle-memory misfires harder.
+wipe_prod:
+  stage: deploy
+  extends: .deploy_defaults
+  environment:
+    name: cargo-prod
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v.*/'
+      when: manual
+  script:
+    - 'test "${CONFIRM_WIPE:-}" = "YES-I-MEAN-IT" || { echo "Refusing to wipe: set CONFIRM_WIPE=YES-I-MEAN-IT when running this job." >&2; exit 1; }'
+    - TARGET_DIR="${DEPLOY_DIR}/${DEPLOY_ENV}"
+    - mkdir -p "${TARGET_DIR}"
+    - cp deploy/compose.yml "${TARGET_DIR}/compose.yml"
+    - cp deploy/paths.env "${TARGET_DIR}/paths.env"
+    - write_app_env "${TARGET_DIR}/app.env"
+    - 'test -n "${DB_PASSWORD:-}" || { echo "Set DB_PASSWORD for ${CI_ENVIRONMENT_NAME:-this environment}" >&2; exit 1; }'
+    - cd "${TARGET_DIR}"
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml down -v
+    - rm -rf "${DATA_DIR}/blobs" "${DATA_DIR}/postgres"
+    - mkdir -p "${DATA_DIR}/blobs" "${DATA_DIR}/postgres"
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml pull
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml up -d
+
+# ---- deploy_prod (automatic on tag v*) ------------------------------------
+deploy_prod:
+  stage: deploy
+  extends: .deploy_defaults
+  needs: ["build"]
+  environment:
+    name: cargo-prod
+    url: https://${APP_HOST_PROD}
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v.*/'
+  script:
+    - TARGET_DIR="${DEPLOY_DIR}/${DEPLOY_ENV}"
+    - cp deploy/compose.yml "${TARGET_DIR}/compose.yml"
+    - cp deploy/paths.env "${TARGET_DIR}/paths.env"
+    - write_app_env "${TARGET_DIR}/app.env"
+    - 'test -n "${DB_PASSWORD:-}" || { echo "Set DB_PASSWORD for ${CI_ENVIRONMENT_NAME:-this environment}" >&2; exit 1; }'
+    - cd "${TARGET_DIR}"
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml pull
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml up -d
+
+# ---- stop_prod (manual) ---------------------------------------------------
+stop_prod:
+  stage: deploy
+  extends: .deploy_defaults
+  environment:
+    name: cargo-prod
+    action: stop
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v.*/'
+      when: manual
+  script:
+    - TARGET_DIR="${DEPLOY_DIR}/${DEPLOY_ENV}"
+    - mkdir -p "${TARGET_DIR}"
+    - cp deploy/compose.yml "${TARGET_DIR}/compose.yml"
+    - cp deploy/paths.env "${TARGET_DIR}/paths.env"
+    - write_app_env "${TARGET_DIR}/app.env"
+    - 'test -n "${DB_PASSWORD:-}" || { echo "Set DB_PASSWORD for ${CI_ENVIRONMENT_NAME:-this environment}" >&2; exit 1; }'
+    - cd "${TARGET_DIR}"
+    - docker compose -p "${APP_SUBDOMAIN}-${DEPLOY_ENV}" --env-file paths.env -f compose.yml down

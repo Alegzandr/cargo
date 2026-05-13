@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" aria-label="Cargo">
+  <path fill="#a57939" d="M32 8.4L18 4.2 4 8.4 4 27.6 18 31.8 32 27.6z"/>
+  <path fill="#c1694f" d="M18 4.2 4 8.4l14 4.2 14-4.2z"/>
+  <path fill="#8a4b38" d="M4 27.6 18 31.8 18 12.6 4 8.4z"/>
+  <path fill="#a57939" d="M32 27.6 18 31.8 18 12.6 32 8.4z" opacity=".85"/>
+  <path fill="#3b2e26" d="M12 6.3v6.3l4 1.2v-6.3z"/>
+  <path fill="#3b2e26" d="M20 13.8 28 11.4v-3.6L20 10.2z" opacity=".7"/>
+</svg>

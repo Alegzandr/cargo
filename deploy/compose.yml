@@ -1,0 +1,77 @@
+# Production compose — one host (cargo.<DOMAIN>), one web + one cleanup worker.
+# Traefik routes everything (UI + /api/*) to the same web service.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-cargo}
+      POSTGRES_USER: ${DB_USERNAME:-cargo}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ${DATA_DIR}/postgres:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-cargo} -d ${DB_DATABASE:-cargo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  web:
+    image: ${CI_REGISTRY_IMAGE}/app:${IMAGE_TAG}
+    restart: unless-stopped
+    env_file:
+      - app.env
+    environment:
+      AUTH_URL: https://${APP_HOST}
+      DATABASE_URL: postgres://${DB_USERNAME:-cargo}:${DB_PASSWORD}@db:5432/${DB_DATABASE:-cargo}
+    volumes:
+      - ${DATA_DIR}/blobs:/var/lib/cargo/blobs
+      - ${DATA_DIR}/logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - traefik
+      - internal
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.${APP_SUBDOMAIN}-${DEPLOY_ENV}.rule=Host(`${APP_HOST}`)
+      - traefik.http.routers.${APP_SUBDOMAIN}-${DEPLOY_ENV}.entrypoints=websecure
+      - traefik.http.routers.${APP_SUBDOMAIN}-${DEPLOY_ENV}.tls=true
+      - traefik.http.routers.${APP_SUBDOMAIN}-${DEPLOY_ENV}.service=${APP_SUBDOMAIN}-${DEPLOY_ENV}
+      - traefik.http.services.${APP_SUBDOMAIN}-${DEPLOY_ENV}.loadbalancer.server.port=3000
+      - traefik.http.routers.${APP_SUBDOMAIN}-${DEPLOY_ENV}.middlewares=${APP_SUBDOMAIN}-noindex@docker
+      - traefik.http.middlewares.${APP_SUBDOMAIN}-noindex.headers.customResponseHeaders.X-Robots-Tag=noindex, nofollow, noarchive
+
+  worker:
+    image: ${CI_REGISTRY_IMAGE}/app:${IMAGE_TAG}
+    restart: unless-stopped
+    command: ["worker"]
+    env_file:
+      - app.env
+    environment:
+      DATABASE_URL: postgres://${DB_USERNAME:-cargo}:${DB_PASSWORD}@db:5432/${DB_DATABASE:-cargo}
+    volumes:
+      - ${DATA_DIR}/blobs:/var/lib/cargo/blobs
+      - ${DATA_DIR}/logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+networks:
+  traefik:
+    external: true
+  internal:
+    driver: bridge

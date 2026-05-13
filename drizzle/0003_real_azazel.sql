@@ -1,0 +1,1 @@
+ALTER TABLE "transfers" ADD COLUMN "first_downloaded_at" timestamp with time zone;

@@ -1,0 +1,28 @@
+# Keep build context lean
+.git
+.gitignore
+.gitlab-ci.yml
+.github
+.idea
+.vscode
+.claude
+node_modules
+.next
+dist
+out
+coverage
+.env
+.env.local
+.env.development
+.env.production
+
+# Dev / CI / docs — not needed in runtime image
+docs
+deploy
+docker-compose*.yml
+README.md
+CLAUDE.md
+DESIGN.md
+tests-e2e
+playwright-report
+test-results

@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 252 252 252;
+  --surface: 255 255 255;
+  --elevated: 255 255 255;
+  --hairline: 226 228 232;
+  --ink: 17 20 24;
+  --muted: 90 96 105;
+  --subtle: 140 145 153;
+  --accent: 234 88 12;
+  --accent-fg: 255 247 237;
+  --danger: 239 83 80;
+  --success: 61 178 122;
+}
+
+.dark {
+  --bg: 13 16 20;
+  --surface: 18 22 28;
+  --elevated: 24 29 36;
+  --hairline: 38 44 53;
+  --ink: 235 238 243;
+  --muted: 156 163 174;
+  --subtle: 111 119 130;
+  --accent: 249 115 22;
+  --accent-fg: 26 14 6;
+  --danger: 239 83 80;
+  --success: 61 178 122;
+}
+
+html, body {
+  background: rgb(var(--bg));
+  color: rgb(var(--ink));
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+.mono {
+  font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer { animation: none; }
+  .animate-flash-success { animation: none; }
+}
+
+/* Hero progress bar shimmer track */
+.cargo-progress-track {
+  position: relative;
+  overflow: hidden;
+  background: rgb(var(--hairline));
+  border-radius: 9999px;
+}
+.cargo-progress-fill {
+  height: 100%;
+  background: rgb(var(--accent));
+  border-radius: 9999px;
+  position: relative;
+  overflow: hidden;
+}
+.cargo-progress-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgb(var(--accent) / 0) 0%, rgb(255 255 255 / 0.35) 50%, rgb(var(--accent) / 0) 100%);
+  animation: shimmer 1400ms linear infinite;
+}

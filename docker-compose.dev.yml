@@ -1,0 +1,79 @@
+# Development stack — local dev with HMR, exposed DB, source bind-mounted.
+#
+#   UI         http://localhost:8080  (Next.js dev server)
+#   DB         localhost:55433        (Postgres, non-standard port)
+#
+# Usage:  docker compose -f docker-compose.dev.yml up --build
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cargo
+      POSTGRES_USER: cargo
+      POSTGRES_PASSWORD: cargo
+    ports:
+      - "55433:5432"
+    volumes:
+      - cargo_dev_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cargo -d cargo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      AUTH_URL: ${AUTH_URL:-http://localhost:8080}
+      AUTH_TRUST_HOST: "true"
+      AUTH_SECRET: ${AUTH_SECRET:-dev-secret-do-not-use-in-prod-please-do-replace-me}
+      AUTH_DISCORD_ID: ${AUTH_DISCORD_ID:-}
+      AUTH_DISCORD_SECRET: ${AUTH_DISCORD_SECRET:-}
+      # 32B of zeros — boot will succeed but the crypto is meaningless. Override in .env.local.
+      CARGO_MASTER_KEY: ${CARGO_MASTER_KEY:-base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+      DATABASE_URL: postgres://cargo:cargo@db:5432/cargo
+      CARGO_BLOB_PATH: /var/lib/cargo/blobs
+      CARGO_MAX_FILE_SIZE: ${CARGO_MAX_FILE_SIZE:-214748364800}
+      CARGO_USER_QUOTA: ${CARGO_USER_QUOTA:-214748364800}
+      CARGO_LINK_TTL_SECONDS: ${CARGO_LINK_TTL_SECONDS:-3600}
+      LOG_LEVEL: debug
+    ports:
+      - "8080:3000"
+    volumes:
+      - .:/app
+      - cargo_dev_node_modules:/app/node_modules
+      - cargo_dev_blobs:/var/lib/cargo/blobs
+    depends_on:
+      db: { condition: service_healthy }
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    restart: unless-stopped
+    command: ["sh", "-c", "if [ ! -d node_modules/next ]; then npm ci; fi && npx tsx src/worker/cleanup.ts"]
+    environment:
+      NODE_ENV: development
+      # Cleanup worker never decrypts — no CARGO_MASTER_KEY here.
+      AUTH_SECRET: ${AUTH_SECRET:-dev-secret-do-not-use-in-prod-please-do-replace-me}
+      AUTH_DISCORD_ID: ${AUTH_DISCORD_ID:-dev}
+      AUTH_DISCORD_SECRET: ${AUTH_DISCORD_SECRET:-dev}
+      DATABASE_URL: postgres://cargo:cargo@db:5432/cargo
+      CARGO_BLOB_PATH: /var/lib/cargo/blobs
+      LOG_LEVEL: debug
+    volumes:
+      - .:/app
+      - cargo_dev_node_modules:/app/node_modules
+      - cargo_dev_blobs:/var/lib/cargo/blobs
+    depends_on:
+      db: { condition: service_healthy }
+
+volumes:
+  cargo_dev_db:
+  cargo_dev_node_modules:
+  cargo_dev_blobs:
