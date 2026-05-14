@@ -56,7 +56,7 @@ const loaders: { [K in keyof EnvShape]: () => EnvShape[K] } = {
   CARGO_MAX_FILE_SIZE: () => int('CARGO_MAX_FILE_SIZE', 214_748_364_800),
   CARGO_USER_QUOTA: () => int('CARGO_USER_QUOTA', 214_748_364_800),
   CARGO_LINK_TTL_SECONDS: () => int('CARGO_LINK_TTL_SECONDS', 3600),
-  CARGO_PENDING_TTL_SECONDS: () => int('CARGO_PENDING_TTL_SECONDS', 604_800),
+  CARGO_PENDING_TTL_SECONDS: () => int('CARGO_PENDING_TTL_SECONDS', 86_400),
   CARGO_MAX_FILENAME_LEN: () => int('CARGO_MAX_FILENAME_LEN', 255),
   LOG_LEVEL: () => (process.env.LOG_LEVEL ?? 'warning') as EnvShape['LOG_LEVEL'],
 };

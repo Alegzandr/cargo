@@ -26,6 +26,11 @@ const sessionsByTransfer = new Map<string, SessionMemo[]>();
 // values here — exposing them as env would invite ad-hoc tuning that drifts
 // from the assumptions the rest of the abuse detector is written against.
 const BANDWIDTH_LIMIT_BYTES_PER_SEC = 50 * 1024 * 1024;
+// Burst grace: the cap is a *sustained* rate, but a fast initial flush
+// (localhost, LAN, proxy buffer) can move tens of MiB before a full wall-clock
+// second has elapsed — making the measured rate meaningless and tripping the
+// kill. Allow this many seconds' worth of bytes on top of the elapsed budget.
+const BANDWIDTH_BURST_GRACE_SEC = 5;
 const DIVERGENCE_WINDOW_MS = 30_000;
 const MAX_RANGE_REOPENS = 4;
 const RANGE_WINDOW_MS = 60_000;
@@ -106,12 +111,13 @@ export function tick(args: { transferId: string; sessionId: string; bytesDelta: 
   const memo = list.find((s) => s.sessionId === args.sessionId);
   if (!memo) return 'ok';
   memo.bytes_sent += args.bytesDelta;
-  const elapsedSec = Math.max(1, (Date.now() - memo.started_at) / 1000);
-  const rate = memo.bytes_sent / elapsedSec;
-  // No 10s warm-up — small files were never reaching it. The 1-second floor on
-  // elapsedSec already absorbs the first-burst noise, and the limit (50 MiB/s)
-  // is high enough that a legitimate connection won't trip it.
-  if (rate > BANDWIDTH_LIMIT_BYTES_PER_SEC) {
+  const elapsedSec = (Date.now() - memo.started_at) / 1000;
+  // Compare against a byte budget rather than an instantaneous rate: the
+  // sustained allowance plus a fixed burst. This absorbs the first-second
+  // flush (where elapsedSec is too small for the rate to mean anything)
+  // without ever letting a genuinely abusive stream outrun 50 MiB/s for long.
+  const budget = BANDWIDTH_LIMIT_BYTES_PER_SEC * (elapsedSec + BANDWIDTH_BURST_GRACE_SEC);
+  if (memo.bytes_sent > budget) {
     memo.controller.abort();
     return 'bandwidth';
   }

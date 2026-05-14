@@ -1,12 +1,13 @@
 'use client';
 import { useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import { Check, CheckCircle2, Clock, Copy, Download, Pencil, Trash2, X } from 'lucide-react';
+import { CheckCircle2, Clock, Download, Link2, Pencil, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Countdown } from './Countdown';
 import { EditRecipientDialog } from './EditRecipientDialog';
 import { PurgeAllDialog } from './PurgeAllDialog';
 import { RevokeDialog } from './RevokeDialog';
+import { ShareLinkDialog } from './ShareLinkDialog';
 import { useTransferPoll } from './useTransferPoll';
 import { formatBytes, truncateMiddle } from '@/lib/utils';
 import type { Direction, TransferRow } from './transferTypes';
@@ -19,15 +20,8 @@ export function TransferTable({ direction }: { direction: Direction }): JSX.Elem
   const { rows, reload } = useTransferPoll(direction);
   const [revoking, setRevoking] = useState<TransferRow | null>(null);
   const [editing, setEditing] = useState<TransferRow | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [sharing, setSharing] = useState<TransferRow | null>(null);
   const [purgeAllOpen, setPurgeAllOpen] = useState(false);
-
-  async function copyLink(id: string): Promise<void> {
-    const url = `${window.location.origin}/d/${id}`;
-    await navigator.clipboard.writeText(url);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1200);
-  }
 
   if (rows === null) return <div />;
 
@@ -136,19 +130,14 @@ export function TransferTable({ direction }: { direction: Direction }): JSX.Elem
                     </Button>
                   ) : (
                     <div className="flex items-center justify-end gap-1">
-                      {r.status === 'ready' && (
+                      {(r.status === 'ready' || r.status === 'pending') && (
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => void copyLink(r.id)}
-                          aria-label={t('copyLink')}
+                          onClick={() => setSharing(r)}
+                          aria-label={t('shareLink')}
                         >
-                          {copiedId === r.id ? (
-                            <Check className="h-3.5 w-3.5" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5" />
-                          )}
-                          {copiedId === r.id ? t('copied') : t('copyLink')}
+                          <Link2 className="h-3.5 w-3.5" /> {t('shareLink')}
                         </Button>
                       )}
                       <button
@@ -179,6 +168,7 @@ export function TransferTable({ direction }: { direction: Direction }): JSX.Elem
         onClose={() => setPurgeAllOpen(false)}
         onPurged={reload}
       />
+      <ShareLinkDialog target={sharing} onClose={() => setSharing(null)} />
       <RevokeDialog
         target={revoking}
         onClose={() => setRevoking(null)}

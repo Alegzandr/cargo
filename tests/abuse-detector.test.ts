@@ -57,6 +57,17 @@ describe('abuse detector', () => {
     expect(['ok', 'bandwidth']).toContain('ok');
   });
 
+  it('a fast initial burst under the grace budget is not killed', () => {
+    const ip = hashIdentifier('1.2.3.4');
+    beginSession({ transferId: 't2b', sessionId: 's1', ipHash: ip, uaHash: ip, isRangeRequest: false });
+    // ~200 MiB delivered effectively instantly (elapsedSec ≈ 0) stays under the
+    // 5s burst budget (250 MiB) — this is the localhost/LAN download case that
+    // used to trip the kill at ~50 MiB.
+    for (let i = 0; i < 8; i++) {
+      expect(tick({ transferId: 't2b', sessionId: 's1', bytesDelta: 25 * 1024 * 1024 })).toBe('ok');
+    }
+  });
+
   it('tick on an unknown transfer or session is a no-op', () => {
     expect(tick({ transferId: 'nope', sessionId: 'x', bytesDelta: 1 })).toBe('ok');
     const ip = hashIdentifier('1.2.3.4');

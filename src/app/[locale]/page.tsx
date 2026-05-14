@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { auth } from '@/lib/auth';
 import { CargoMark } from '@/components/CargoMark';
 import { LandingDemo } from '@/components/landing/LandingDemo';
@@ -45,6 +45,7 @@ export default async function HomePage({
     auth(),
   ]);
   const authed = Boolean(session?.user?.id);
+  if (authed) redirect(`/${locale}/dashboard`);
 
   return (
     <div className="min-h-screen bg-bg text-ink flex flex-col">
